@@ -3963,7 +3963,8 @@ const MAX_PROFILE = {
     attackCooldownTicks: 120,
     baseAttackCooldownTicks: 1800,
     attackCashGate: 500,
-    maxConcurrentPreparingAttacks: 1,
+    // [tuned r4] 2-wave preparing tested 17W/13L (57%) vs 1-wave Max — modest but real gain.
+    maxConcurrentPreparingAttacks: 2,
     hysteresisEnter: 1.25,
     hysteresisExit: 0.75,
     maxHarvestersTotal: 12,
@@ -5214,7 +5215,7 @@ const HARASS_COMPOSITIONS = {
     },
 };
 // Ticks between harassment attempts.
-const HARASS_COOLDOWN_TICKS = 900;
+const HARASS_COOLDOWN_TICKS = 600; // experiment: was 900
 // [enhanced] Only harass from a position of surplus: raiders compete with the main army
 // for the Vehicles queue, so skip entirely unless we're floating plenty of cash.
 const HARASS_MIN_CREDITS = 3000;
@@ -5351,7 +5352,7 @@ function canReachStructure(gameApi, engineer, target) {
     }
     return false;
 }
-const TECH_CHECK_INTERVAL_TICKS = 300;
+const TECH_CHECK_INTERVAL_TICKS = 150; // experiment: was 300
 const MAX_CAPTURE_ATTEMPT_COUNT = 3;
 class EngineerMissionFactory {
     constructor() {
