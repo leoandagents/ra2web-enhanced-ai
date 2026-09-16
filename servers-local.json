@@ -1,0 +1,11 @@
+{
+  "regions": [
+    {
+      "id": "SELFHOST",
+      "label": "自建大厅",
+      "available": true,
+      "wolUrl": "ws://localhost:8901/wol",
+      "apiRegUrl": "http://localhost:8901/register"
+    }
+  ]
+}

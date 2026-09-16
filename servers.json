@@ -1,6 +1,13 @@
 {
   "regions": [
     {
+      "id": "SELFHOST",
+      "label": "自建大厅(噩梦AI)",
+      "available": true,
+      "wolUrl": "wss://ra2web.yanghui.name/wol",
+      "apiRegUrl": "https://ra2web.yanghui.name/register"
+    },
+    {
       "id": "CHN2",
       "label": "张三大区",
       "available": true,

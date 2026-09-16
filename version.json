@@ -489,6 +489,11 @@
       "bytes": 863219,
       "sha256": "d2652b4e42166ea5b5542ac93a0a4afd9a8726dc1d109e88ff4979d92be50e50",
       "integrity": "sha384-d5sWqU+bHmr1SeNrXgPO76F/0x5r2napmaUYB8veGFN7gw5n72lBEAZW7PaCLYym"
+    },
+    "servers.json": {
+      "bytes": 1282,
+      "sha256": "8df965b8f54a33bf6f06e0b2ef4f48ca216311b22c0f30862da065a0d4b88624",
+      "integrity": "sha384-5fKgeKdK9ILBmAJ6wlM/ZHyyJ8ae8TmOZlR7A2VqlcUYzwVDepEqtovNeqqBk706"
     }
   }
 }
