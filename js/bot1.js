@@ -4900,6 +4900,9 @@ const VISIBLE_TARGET_ATTACK_COOLDOWN_TICKS = 60;
 const BASE_ATTACK_COOLDOWN_TICKS = 900;
 // [enhanced] Allow up to this many attack missions to prepare at once (was 1), creating back-to-back waves.
 const MAX_CONCURRENT_PREPARING_ATTACKS = 2;
+// [enhanced] Don't start preparing a NEW attack wave while broke: waves in flight continue,
+// but the production queues go to harvesters/refineries/tech until the economy recovers.
+const MIN_CASH_FOR_NEW_ATTACK_WAVE = 1000;
 const ATTACK_MISSION_INITIAL_PRIORITY = 1;
 class AttackMissionFactory {
     constructor(lastAttackAt = -VISIBLE_TARGET_ATTACK_COOLDOWN_TICKS) {
@@ -4915,6 +4918,11 @@ class AttackMissionFactory {
             return;
         }
         if (game.getCurrentTick() < this.lastAttackAt + VISIBLE_TARGET_ATTACK_COOLDOWN_TICKS) {
+            return;
+        }
+        // [enhanced] cash gate: constant tank production was starving base development
+        // (refineries/radar/tech all lost the queue to attack waves). Broke = build economy first.
+        if (playerData.credits < MIN_CASH_FOR_NEW_ATTACK_WAVE) {
             return;
         }
         // can only have a limited number of attacks 'preparing' at once.
@@ -5312,6 +5320,24 @@ const DEFAULT_COMPOSITIONS = {
         minimumUnits: 4,
         maximumUnits: 10,
     },
+    // [enhanced] Naval compositions. getValidCompositions only enables these once every
+    // listed unit is buildable, i.e. after a naval yard exists — pure land maps never see them.
+    alliedNavy: {
+        composition: {
+            DEST: 3,
+            AEGIS: 1,
+        },
+        minimumUnits: 3,
+        maximumUnits: 8,
+    },
+    sovietNavy: {
+        composition: {
+            SUB: 3,
+            HYD: 1,
+        },
+        minimumUnits: 3,
+        maximumUnits: 8,
+    },
 };
 class DefaultStrategy {
     constructor() {
@@ -5589,7 +5615,9 @@ class Harvester extends BasicGroundUnit {
         const refineries = game.getVisibleUnits(playerData.name, "self", (r) => r.refinery).length;
         const harvesters = game.getVisibleUnits(playerData.name, "self", (r) => r.harvester).length;
         const boost = harvesters < this.minNeeded ? 3 : harvesters > refineries * MAX_HARVESTERS_PER_REFINERY ? 0 : 1;
-        return this.basePriority * (refineries / Math.max(harvesters / IDEAL_HARVESTERS_PER_REFINERY, 1)) * boost;
+        // [enhanced] when cash is tight, getting miners out becomes urgent.
+        const cashBoost = playerData.credits < 800 ? 2 : 1;
+        return this.basePriority * (refineries / Math.max(harvesters / IDEAL_HARVESTERS_PER_REFINERY, 1)) * boost * cashBoost;
     }
     getMaxCount(game, playerData, technoRules, threatCache) {
         return MAX_HARVESTERS_TOTAL;
@@ -5634,6 +5662,24 @@ class AntiAirStaticDefence {
     }
     getMaxCount(game, playerData, technoRules, threatCache) {
         return null;
+    }
+}
+
+/**
+ * [enhanced] Naval yard: enables ship production. Placed on water, near a conyard.
+ * On maps without water no valid placement exists, so it simply never gets built.
+ */
+class NavalYard extends BasicBuilding {
+    getPlacementLocation(game, playerData, technoRules) {
+        const conyardVectors = game
+            .getVisibleUnits(playerData.name, "self", (r) => r.constructionYard)
+            .map((r) => game.getGameObjectData(r)?.tile)
+            .filter((t) => !!t)
+            .map((t) => new V(t.rx, t.ry));
+        if (conyardVectors.length === 0) {
+            return undefined;
+        }
+        return getDefaultPlacementLocation(game, playerData, conyardVectors[0], technoRules, true);
     }
 }
 
@@ -5725,12 +5771,18 @@ const BUILDING_NAME_TO_RULES = new Map([
     ["GAREFN", new ResourceCollectionBuilding(10, 3)],
     ["GAWEAP", new BasicBuilding(15, 3)],
     ["GAPILE", new BasicBuilding(12, 1)],
-    ["CMIN", new Harvester(15, 4, 2)],
-    ["GADEPT", new BasicBuilding(1, 1, 10000)],
+    ["CMIN", new Harvester(15, 4, 4)],
+    ["GADEPT", new BasicBuilding(1, 1, 5000)],
     ["GAAIRC", new BasicBuilding(10, 1, 500)],
     ["AMRADR", new BasicBuilding(10, 1, 500)],
     ["GATECH", new BasicBuilding(20, 1, 4000)],
-    ["GAYARD", new BasicBuilding(0, 0, 0)],
+    ["GAYARD", new NavalYard(8, 1, 2000)],
+    // [enhanced] Allied ships (built via Ships queue when requested by missions)
+    ["DEST", new BasicGroundUnit(10, 2, 2, 0)],
+    ["AEGIS", new BasicGroundUnit(5, 1, 0, 2)],
+    ["CARRIER", new BasicGroundUnit(8, 1, 4, 0)],
+    ["DLPH", new BasicGroundUnit(5, 1, 1, 0)],
+    ["SAPC", new BasicGroundUnit(0, 0)],
     ["GAPILL", new AntiGroundStaticDefence(2, 1, 7.5, 5)],
     ["ATESLA", new AntiGroundStaticDefence(2, 1, 10, 3)],
     ["NASAM", new AntiAirStaticDefence(1, 1, 7.5)],
@@ -5750,11 +5802,16 @@ const BUILDING_NAME_TO_RULES = new Map([
     ["NAREFN", new ResourceCollectionBuilding(10, 3)],
     ["NAWEAP", new BasicBuilding(15, 3)],
     ["NAHAND", new BasicBuilding(12, 1)],
-    ["HARV", new Harvester(15, 4, 2)],
-    ["NADEPT", new BasicBuilding(1, 1, 10000)],
+    ["HARV", new Harvester(15, 4, 4)],
+    ["NADEPT", new BasicBuilding(1, 1, 5000)],
     ["NARADR", new BasicBuilding(10, 1, 500)],
     ["NANRCT", new PowerPlant()],
-    ["NAYARD", new BasicBuilding(0, 0, 0)],
+    ["NAYARD", new NavalYard(8, 1, 2000)],
+    // [enhanced] Soviet ships (built via Ships queue when requested by missions)
+    ["SUB", new BasicGroundUnit(10, 2, 2, 0)],
+    ["HYD", new BasicGroundUnit(5, 1, 0, 2)],
+    ["DRED", new BasicGroundUnit(8, 1, 4, 0)],
+    ["SQD", new BasicGroundUnit(5, 1, 1, 0)],
     ["NATECH", new BasicBuilding(20, 1, 4000)],
     ["NALASR", new AntiGroundStaticDefence(2, 1, 7.5, 5)],
     ["NAFLAK", new AntiAirStaticDefence(1, 1, 7.5)],
@@ -5934,7 +5991,7 @@ class SupalosaBot extends _ {
         ];
         this.matchAwareness.onGameStart(game, myPlayer);
         // [enhanced] Announce ourselves in the in-game chat so it's obvious this is the enhanced build.
-        this.actionsApi.sayAll("[增强版AI] P0+P1+P2 已加载：进攻更凶、经济更强、还会护矿。祝你好运！");
+        this.actionsApi.sayAll("[增强版AI] v2 已加载：前期照旧凶猛，现在还学会攒钱发展了。祝你好运！");
         this.tryAllyWith
             .filter((playerName) => playerName !== this.name)
             .forEach((playerName) => this.actionsApi.toggleAlliance(playerName, true));
@@ -6031,7 +6088,7 @@ const version = "0.87.0";
 const buildInfo = Object.freeze({
     generation: 1,
     sourceCommit: "local-enhanced",
-    sourceRole: "enhanced-fork-p0-p2",
+    sourceRole: "enhanced-fork-v2-naval",
     artifactSource: "local-build",
     naval: false,
 });
