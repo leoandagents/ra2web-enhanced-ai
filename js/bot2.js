@@ -3981,7 +3981,7 @@ const MAX_PROFILE = {
     retreatMicro: false,
     persistentScouting: true,
     harassment: true,
-    apm: 450,
+    apm: 300, // [tuned r10] 450 tested 55% vs baseline (Lite=75%); 300 is the sweet spot
 };
 const PROFILES = {
     lite: LITE_PROFILE,
