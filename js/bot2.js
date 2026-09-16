@@ -3902,11 +3902,107 @@ class BuildSpaceCache {
     }
 }
 
+const LITE_PROFILE = {
+    name: "lite",
+    displayName: "标准",
+    attackCooldownTicks: 120,
+    baseAttackCooldownTicks: 1800,
+    attackCashGate: 500,
+    maxConcurrentPreparingAttacks: 1,
+    hysteresisEnter: 1.25,
+    hysteresisExit: 0.75,
+    maxHarvestersTotal: 12,
+    idealHarvestersPerRefinery: 2,
+    refineryHardLimit: 6,
+    expansionMinMoney: 4000,
+    expansionDelayTicks: 15 * 60 * 6,
+    defenceCheckTicks: 30,
+    defenceStartingRadius: 6,
+    defenceInitialPriority: 10,
+    openingBook: true,
+    harvesterDefence: true,
+    focusFire: false,
+    retreatMicro: false,
+    persistentScouting: false,
+    harassment: false,
+    apm: 300,
+};
+const STANDARD_PROFILE = {
+    name: "standard",
+    displayName: "困难",
+    // [tuned r3] isolation tests on mp06t2: focusFire was catastrophic (2W/17L - units dive
+    // after wounded targets), retreatMicro slightly negative (7W/9L), defence buffs mildly
+    // positive (8W/7L). Standard = Lite + defence buffs ONLY.
+    attackCooldownTicks: 120,
+    baseAttackCooldownTicks: 1800,
+    attackCashGate: 500,
+    maxConcurrentPreparingAttacks: 1,
+    hysteresisEnter: 1.25,
+    hysteresisExit: 0.75,
+    maxHarvestersTotal: 12,
+    idealHarvestersPerRefinery: 2,
+    refineryHardLimit: 6,
+    expansionMinMoney: 4000,
+    expansionDelayTicks: 15 * 60 * 6,
+    defenceCheckTicks: 10,
+    defenceStartingRadius: 10,
+    defenceInitialPriority: 30,
+    openingBook: true,
+    harvesterDefence: true,
+    focusFire: false,
+    retreatMicro: false,
+    persistentScouting: false,
+    harassment: false,
+    apm: 300,
+};
+const MAX_PROFILE = {
+    name: "max",
+    displayName: "噩梦",
+    // [tuned r3] Standard + harassment (cash-gated so it can't steal tank production) +
+    // persistent scouting + higher APM budget.
+    attackCooldownTicks: 120,
+    baseAttackCooldownTicks: 1800,
+    attackCashGate: 500,
+    maxConcurrentPreparingAttacks: 1,
+    hysteresisEnter: 1.25,
+    hysteresisExit: 0.75,
+    maxHarvestersTotal: 12,
+    idealHarvestersPerRefinery: 2,
+    refineryHardLimit: 6,
+    expansionMinMoney: 4000,
+    expansionDelayTicks: 15 * 60 * 6,
+    defenceCheckTicks: 10,
+    defenceStartingRadius: 10,
+    defenceInitialPriority: 30,
+    openingBook: true,
+    harvesterDefence: true,
+    focusFire: false,
+    retreatMicro: false,
+    persistentScouting: true,
+    harassment: true,
+    apm: 450,
+};
+const PROFILES = {
+    lite: LITE_PROFILE,
+    standard: STANDARD_PROFILE,
+    max: MAX_PROFILE,
+};
+function getProfileByName(name) {
+    if (name in PROFILES) {
+        return PROFILES[name];
+    }
+    return STANDARD_PROFILE;
+}
+function getBundleProfile() {
+    const injected = "standard" ;
+    return getProfileByName(injected);
+}
+
 const SECTORS_TO_UPDATE_PER_CYCLE = 12;
 const RALLY_POINT_UPDATE_INTERVAL_TICKS = 90;
 const THREAT_UPDATE_INTERVAL_TICKS = 30;
 const EXPANSION_UPDATE_INTERVAL_TICKS = 240;
-const EXPANSION_MIN_MONEY = 2500; // [enhanced] was 4000: expand to poorer fields sooner
+// [enhanced] expansion money threshold moved to DifficultyProfile.expansionMinMoney
 const EXPANSION_MIN_DISTANCE_TO_BUILDABLE = 20;
 const EXPANSION_MIN_CLEAR_SPACE_TILES = 9; // minimum "clear space" required to expand somewhere (should be large enough to fit conyard and refinery)
 const rebuildQuadtree = (quadtree, units) => {
@@ -3916,10 +4012,11 @@ const rebuildQuadtree = (quadtree, units) => {
     });
 };
 class MatchAwarenessImpl {
-    constructor(gameApi, playerData, threatCache, mainRallyPoint, logger) {
+    constructor(gameApi, playerData, threatCache, mainRallyPoint, logger, profile = STANDARD_PROFILE) {
         this.threatCache = threatCache;
         this.mainRallyPoint = mainRallyPoint;
         this.logger = logger;
+        this.profile = profile;
         this._shouldAttack = false;
         this.expansionCandidates = [];
         const mapSize = gameApi.mapApi.getRealMapSize();
@@ -4030,16 +4127,16 @@ class MatchAwarenessImpl {
                 this.logger(`Game length multiplier: ${gameLengthFactor}`);
                 if (!this._shouldAttack) {
                     // If not attacking, make it harder to switch to attack mode by multiplying the opponent's threat.
-                    // [enhanced] 1.25 -> 1.05: switch to attack mode with only a slight firepower edge.
-                    this._shouldAttack = this.checkShouldAttack(this.threatCache, 1.05 * gameLengthFactor);
+                    // [enhanced] thresholds from difficulty profile (1.05 for standard/max, 1.25 for lite)
+                    this._shouldAttack = this.checkShouldAttack(this.threatCache, this.profile.hysteresisEnter * gameLengthFactor);
                     if (this._shouldAttack) {
                         this.logger(`Globally switched to attack mode.`);
                     }
                 }
                 else {
                     // If currently attacking, make it harder to switch to defence mode my dampening the opponent's threat.
-                    // [enhanced] 0.75 -> 0.6: stay on the attack longer.
-                    this._shouldAttack = this.checkShouldAttack(this.threatCache, 0.6 * gameLengthFactor);
+                    // [enhanced] thresholds from difficulty profile (0.6 for standard/max, 0.75 for lite)
+                    this._shouldAttack = this.checkShouldAttack(this.threatCache, this.profile.hysteresisExit * gameLengthFactor);
                     if (!this._shouldAttack) {
                         this.logger(`Globally switched to defence mode.`);
                     }
@@ -4067,7 +4164,7 @@ class MatchAwarenessImpl {
                 if (!cell) {
                     return false;
                 }
-                if (cell.value.totalMoney && cell.value.totalMoney < EXPANSION_MIN_MONEY) {
+                if (cell.value.totalMoney && cell.value.totalMoney < this.profile.expansionMinMoney) {
                     return false;
                 }
                 if (ownBuildingVectors.some((ref) => ref.distanceTo(candidate) < EXPANSION_MIN_DISTANCE_TO_BUILDABLE)) {
@@ -4276,7 +4373,7 @@ class PackConyardMission extends Mission {
     }
 }
 const CONYARD_PACK_COOLDOWN = 15 * 60 * 4; // [enhanced] was 6 mins -> 4 mins
-const DO_NOT_EXPAND_BEFORE_TICKS = 15 * 60 * 4; // [enhanced] was 6 minutes -> 4 minutes
+// [enhanced] expansion start delay moved to DifficultyProfile.expansionDelayTicks
 class ExpansionMissionFactory {
     constructor(lastConyardPackAt = Number.MIN_VALUE) {
         this.lastConyardPackAt = lastConyardPackAt;
@@ -4285,12 +4382,13 @@ class ExpansionMissionFactory {
         return "ExpansionMissionFactory";
     }
     maybeCreateMissions(context, missionController, logger) {
-        const { game, player, matchAwareness } = context;
+        const { game, player, matchAwareness, profile } = context;
         const playerData = game.getPlayerData(player.name);
         const mcvs = game.getVisibleUnits(player.name, "self", (r) => game.getGeneralRules().baseUnit.includes(r.name));
         const expandToCandidates = matchAwareness.getNextExpansionCandidates();
+        const expansionDelayTicks = profile.expansionDelayTicks; // [enhanced]
         // This is used for deploying the initial MCV.
-        if (game.getCurrentTick() < DO_NOT_EXPAND_BEFORE_TICKS) {
+        if (game.getCurrentTick() < expansionDelayTicks) {
             mcvs.forEach((mcv) => {
                 missionController.addMission(new ExpansionMission("initial-deploy-mcv-" + mcv, 100, mcv, [playerData.startLocation], logger));
             });
@@ -4304,7 +4402,7 @@ class ExpansionMissionFactory {
         if (!expandToCandidates[0] || !threatCache) {
             return;
         }
-        if (game.getCurrentTick() < DO_NOT_EXPAND_BEFORE_TICKS ||
+        if (game.getCurrentTick() < expansionDelayTicks ||
             game.getCurrentTick() < this.lastConyardPackAt + CONYARD_PACK_COOLDOWN) {
             return;
         }
@@ -4444,7 +4542,9 @@ class ScoutingMissionFactory {
     }
     maybeCreateMissions(context, missionController, logger) {
         const { game, matchAwareness } = context;
-        if (game.getCurrentTick() < this.lastScoutAt + SCOUT_COOLDOWN_TICKS) {
+        // [enhanced] max tier scouts more aggressively to keep target selection fed.
+        const cooldown = context.profile.persistentScouting ? SCOUT_COOLDOWN_TICKS / 2 : SCOUT_COOLDOWN_TICKS;
+        if (game.getCurrentTick() < this.lastScoutAt + cooldown) {
             return;
         }
         if (!matchAwareness.getScoutingManager().hasScoutTargets()) {
@@ -4499,7 +4599,7 @@ function manageAttackMicro(attacker, target) {
  * @param target
  * @returns A number describing the weight of the given target for the attacker, or null if it should not attack it.
  */
-function getAttackWeight(attacker, target) {
+function getAttackWeight(attacker, target, profile) {
     const { rx: x, ry: y } = attacker.tile;
     const { rx: hX, ry: hY } = target.tile;
     if (!attacker.primaryWeapon?.projectileRules.isAntiAir && target.zone === Z.Air) {
@@ -4510,8 +4610,10 @@ function getAttackWeight(attacker, target) {
     }
     // [enhanced] focus fire: prefer finishing off damaged enemies, so firepower isn't
     // spread across many half-dead targets that all keep shooting back.
-    const damageRatio = target.maxHitPoints > 0 ? 1 - target.hitPoints / target.maxHitPoints : 0;
-    const focusBonus = damageRatio * FOCUS_FIRE_BONUS;
+    // Enabled by the difficulty profile (standard/max).
+    const focusBonus = profile?.focusFire && target.maxHitPoints > 0
+        ? (1 - target.hitPoints / target.maxHitPoints) * FOCUS_FIRE_BONUS
+        : 0;
     return 1000000 - getDistanceBetweenPoints(new V(x, y), new V(hX, hY)) + focusBonus;
 }
 // [enhanced] How much a fully-damaged target is preferred over a full-hp one (in tile-distance-equivalents).
@@ -4608,12 +4710,14 @@ class CombatSquad {
                     .map(({ unitId }) => game.getUnitData(unitId))
                     .filter((unit) => !isOwnedByNeutral(unit));
                 for (const unit of units) {
-                    // [enhanced] pull critically damaged units out of the fight.
-                    if (unit.hitPoints > 0 && unit.hitPoints < unit.maxHitPoints * RETREAT_HP_RATIO) {
+                    // [enhanced] pull critically damaged units out of the fight (per difficulty profile).
+                    if (context.profile.retreatMicro &&
+                        unit.hitPoints > 0 &&
+                        unit.hitPoints < unit.maxHitPoints * RETREAT_HP_RATIO) {
                         this.submitActionIfNew(actionBatcher, manageMoveMicro(unit, this.rallyArea));
                         continue;
                     }
-                    const bestUnit = maxBy(nearbyHostiles, (target) => getAttackWeight(unit, target));
+                    const bestUnit = maxBy(nearbyHostiles, (target) => getAttackWeight(unit, target, context.profile));
                     if (bestUnit) {
                         this.submitActionIfNew(actionBatcher, manageAttackMicro(unit, bestUnit));
                         this.debugLastTarget = `Unit ${bestUnit.id.toString()}`;
@@ -4892,50 +4996,39 @@ function generateTarget(gameApi, playerData, matchAwareness, includeBaseLocation
     }
     return null;
 }
-// Number of ticks between attacking visible targets.
-// [enhanced] 120 -> 60: attack waves twice as often.
-const VISIBLE_TARGET_ATTACK_COOLDOWN_TICKS = 60;
-// Number of ticks between attacking "bases" (enemy starting locations).
-// [enhanced] 1800 -> 900: start pushing unscouted enemy bases ~1 min earlier.
-const BASE_ATTACK_COOLDOWN_TICKS = 900;
-// [enhanced] Back to 1 concurrent preparing attack (upstream value). A/B testing showed that
-// 2 concurrent waves with different compositions thrash the production queue (their ramping
-// priorities repeatedly cross the 2x dequeue threshold, cancelling in-progress units).
-const MAX_CONCURRENT_PREPARING_ATTACKS = 1;
-// [enhanced] Don't start preparing a NEW attack wave while broke: waves in flight continue,
-// but the production queues go to harvesters/refineries/tech until the economy recovers.
-const MIN_CASH_FOR_NEW_ATTACK_WAVE = 500;
+// [enhanced] Attack cadence/cash-gate/concurrency knobs moved to DifficultyProfile
+// (attackCooldownTicks, baseAttackCooldownTicks, attackCashGate, maxConcurrentPreparingAttacks).
 const ATTACK_MISSION_INITIAL_PRIORITY = 1;
 class AttackMissionFactory {
-    constructor(lastAttackAt = -VISIBLE_TARGET_ATTACK_COOLDOWN_TICKS) {
+    constructor(lastAttackAt = -1e9) {
         this.lastAttackAt = lastAttackAt;
     }
     getName() {
         return "AttackMissionFactory";
     }
     maybeCreateMissions(context, missionController, logger, composition) {
-        const { game, matchAwareness } = context;
+        const { game, matchAwareness, profile } = context;
         const playerData = game.getPlayerData(context.player.name);
         if (!composition) {
             return;
         }
-        if (game.getCurrentTick() < this.lastAttackAt + VISIBLE_TARGET_ATTACK_COOLDOWN_TICKS) {
+        if (game.getCurrentTick() < this.lastAttackAt + profile.attackCooldownTicks) {
             return;
         }
         // [enhanced] cash gate: constant tank production was starving base development
         // (refineries/radar/tech all lost the queue to attack waves). Broke = build economy first.
-        if (playerData.credits < MIN_CASH_FOR_NEW_ATTACK_WAVE) {
+        if (playerData.credits < profile.attackCashGate) {
             return;
         }
         // can only have a limited number of attacks 'preparing' at once.
         const preparingCount = missionController
             .getMissions()
             .filter((mission) => mission instanceof AttackMission && mission.getState() === AttackMissionState.Preparing).length;
-        if (preparingCount >= MAX_CONCURRENT_PREPARING_ATTACKS) {
+        if (preparingCount >= profile.maxConcurrentPreparingAttacks) {
             return;
         }
         const attackRadius = 10;
-        const includeEnemyBases = game.getCurrentTick() > this.lastAttackAt + BASE_ATTACK_COOLDOWN_TICKS;
+        const includeEnemyBases = game.getCurrentTick() > this.lastAttackAt + profile.baseAttackCooldownTicks;
         const attackArea = generateTarget(game, playerData, matchAwareness, includeEnemyBases);
         if (!attackArea) {
             return;
@@ -4998,11 +5091,8 @@ class DefenceMission extends Mission {
         return this.priority;
     }
 }
-// [enhanced] 30 -> 10: check for intruders three times as often.
-const DEFENCE_CHECK_TICKS = 10;
-// Starting radius around the player's base to trigger defense.
-// [enhanced] 6 -> 10: notice threats approaching the base earlier.
-const DEFENCE_STARTING_RADIUS = 10;
+// [enhanced] Defence responsiveness knobs moved to DifficultyProfile
+// (defenceCheckTicks, defenceStartingRadius, defenceInitialPriority).
 // Every game tick, we increase the defendable area by this amount.
 const DEFENCE_RADIUS_INCREASE_PER_GAME_TICK = 0.0001;
 class DefenceMissionFactory {
@@ -5013,13 +5103,13 @@ class DefenceMissionFactory {
         return "DefenceMissionFactory";
     }
     maybeCreateMissions(context, missionController, logger) {
-        const { game, matchAwareness } = context;
-        if (game.getCurrentTick() < this.lastDefenceCheckAt + DEFENCE_CHECK_TICKS) {
+        const { game, matchAwareness, profile } = context;
+        if (game.getCurrentTick() < this.lastDefenceCheckAt + profile.defenceCheckTicks) {
             return;
         }
         this.lastDefenceCheckAt = game.getCurrentTick();
         const defendablePoints = this.getDefendablePoints(context);
-        const defendableRadius = DEFENCE_STARTING_RADIUS + DEFENCE_RADIUS_INCREASE_PER_GAME_TICK * game.getCurrentTick();
+        const defendableRadius = profile.defenceStartingRadius + DEFENCE_RADIUS_INCREASE_PER_GAME_TICK * game.getCurrentTick();
         for (const defendablePoint of defendablePoints) {
             const enemiesNearPoint = matchAwareness
                 .getHostilesNearPoint2d(defendablePoint, defendableRadius)
@@ -5027,7 +5117,7 @@ class DefenceMissionFactory {
                 .filter((unit) => !isOwnedByNeutral(unit));
             if (enemiesNearPoint.length > 0) {
                 logger(`Starting defence mission, ${enemiesNearPoint.length} found in radius ${defendableRadius} (tick ${game.getCurrentTick()})`);
-                missionController.addMission(new DefenceMission(`globalDefence.${defendablePoint.x}.${defendablePoint.y}`, 30, // [enhanced] was 10: grab units from other missions faster
+                missionController.addMission(new DefenceMission(`globalDefence.${defendablePoint.x}.${defendablePoint.y}`, profile.defenceInitialPriority, // [enhanced] from difficulty profile
                 matchAwareness.getMainRallyPoint(), defendablePoint, defendableRadius, logger));
             }
         }
@@ -5101,6 +5191,70 @@ class HarvesterDefenceMissionFactory {
             if (created) {
                 logger(`Harvester ${unitId} under threat (${enemiesNearHarvester.length} hostiles), dispatching escort.`);
             }
+        }
+    }
+}
+
+/**
+ * [enhanced] Hit-and-run harassment: small fast squads that go after exposed enemy
+ * harvesters/refineries, forcing the opponent to split their attention and army.
+ * Only enabled by the "max" difficulty profile.
+ */
+// Fast raider squads per side.
+const HARASS_COMPOSITIONS = {
+    soviet: {
+        composition: { HTK: 1 },
+        minimumUnits: 2,
+        maximumUnits: 4,
+    },
+    allied: {
+        composition: { FV: 1 },
+        minimumUnits: 2,
+        maximumUnits: 4,
+    },
+};
+// Ticks between harassment attempts.
+const HARASS_COOLDOWN_TICKS = 900;
+// [enhanced] Only harass from a position of surplus: raiders compete with the main army
+// for the Vehicles queue, so skip entirely unless we're floating plenty of cash.
+const HARASS_MIN_CREDITS = 3000;
+const HARASS_ATTACK_RADIUS = 10;
+class HarassmentMissionFactory {
+    constructor() {
+        this.lastHarassAt = -HARASS_COOLDOWN_TICKS;
+    }
+    getName() {
+        return "HarassmentMissionFactory";
+    }
+    maybeCreateMissions(context, missionController, logger, composition) {
+        const { game, matchAwareness } = context;
+        if (game.getCurrentTick() < this.lastHarassAt + HARASS_COOLDOWN_TICKS) {
+            return;
+        }
+        if (game.getPlayerData(context.player.name).credits < HARASS_MIN_CREDITS) {
+            return;
+        }
+        // Only pounce on a visible, exposed target — harassment without intel is suicide.
+        const enemyHarvesters = game
+            .getVisibleUnits(context.player.name, "enemy")
+            .map((unitId) => game.getUnitData(unitId))
+            .filter((unit) => !!unit &&
+            !isOwnedByNeutral(unit) &&
+            unit.rules.harvester &&
+            game.getPlayerData(unit.owner).isCombatant);
+        if (enemyHarvesters.length === 0) {
+            return;
+        }
+        const target = enemyHarvesters[game.generateRandomInt(0, enemyHarvesters.length - 1)];
+        const targetPos = new V(target.tile.rx, target.tile.ry);
+        const squadName = "harass_" + game.getCurrentTick();
+        const created = missionController.addMission(new AttackMission(squadName, 1, matchAwareness.getMainRallyPoint(), targetPos, HARASS_ATTACK_RADIUS, composition, logger).withOnFinish((unitIds, reason) => {
+            logger(`Harassment ${squadName} finished with reason: ${reason}`);
+            // No retreat mission: survivors are released back to the pool.
+        }));
+        if (created) {
+            logger(`Harassment squad dispatched against enemy harvester at ${targetPos.x},${targetPos.y}`);
+            this.lastHarassAt = game.getCurrentTick();
         }
     }
 }
@@ -5348,17 +5502,29 @@ class DefaultStrategy {
         this.attackFactory = new AttackMissionFactory();
         this.defenceFactory = new DefenceMissionFactory();
         this.harvesterDefenceFactory = new HarvesterDefenceMissionFactory(); // [enhanced] escort threatened miners
+        this.harassmentFactory = new HarassmentMissionFactory(); // [enhanced] hit-and-run raiders (max tier)
         this.engineerFactory = new EngineerMissionFactory();
     }
     onAiUpdate(context, missionController, logger) {
+        const { profile } = context; // [enhanced]
         this.expansionFactory.maybeCreateMissions(context, missionController, logger);
         this.scoutingFactory.maybeCreateMissions(context, missionController, logger);
         const composition = this.selectRandomAttackComposition(context, logger);
         if (composition) {
             this.attackFactory.maybeCreateMissions(context, missionController, logger, composition);
         }
+        // [enhanced] hit-and-run raiders, only on tiers that enable it.
+        if (profile.harassment) {
+            const side = context.game.getPlayerData(context.player.name).country?.side;
+            // SideType.Nod is the legacy name for the Soviet side.
+            const harassComposition = side === b.Nod ? HARASS_COMPOSITIONS.soviet : HARASS_COMPOSITIONS.allied;
+            this.harassmentFactory.maybeCreateMissions(context, missionController, logger, harassComposition);
+        }
         this.defenceFactory.maybeCreateMissions(context, missionController, logger);
-        this.harvesterDefenceFactory.maybeCreateMissions(context, missionController, logger);
+        // [enhanced] harvester escort, per tier.
+        if (profile.harvesterDefence) {
+            this.harvesterDefenceFactory.maybeCreateMissions(context, missionController, logger);
+        }
         this.engineerFactory.maybeCreateMissions(context, missionController, logger);
         return this;
     }
@@ -5546,8 +5712,7 @@ class PowerPlant {
 }
 
 const NO_REFINERY_DISTANCE = 10;
-// [enhanced] 6 -> 8: more refineries to feed the larger harvester fleet.
-const REFINERY_HARD_LIMIT = 8;
+// [enhanced] hard limit moved to DifficultyProfile.refineryHardLimit
 class ResourceCollectionBuilding extends BasicBuilding {
     constructor(basePriority, maxNeeded, onlyBuildWhenFloatingCreditsAmount) {
         super(basePriority, maxNeeded, onlyBuildWhenFloatingCreditsAmount);
@@ -5584,7 +5749,7 @@ class ResourceCollectionBuilding extends BasicBuilding {
         return getDefaultPlacementLocation(game, playerData, selectedLocation, technoRules);
     }
     // Don't build/start selling these if we don't have any harvesters
-    getMaxCount(game, playerData, technoRules, threatCache) {
+    getMaxCount(game, playerData, technoRules, threatCache, profile = STANDARD_PROFILE) {
         const harvesters = game.getVisibleUnits(playerData.name, "self", (r) => r.harvester).length;
         // if there is no refinery within distance of a conyard, that conyard wants an expansion
         const conyardBoxes = game
@@ -5597,32 +5762,32 @@ class ResourceCollectionBuilding extends BasicBuilding {
             .map((b) => game.getUnitsInArea(b))
             .filter((unitIds) => unitIds.some((unitId) => getCachedTechnoRules(game, unitId)?.refinery));
         const conyardsWithoutRefineries = conyardBoxes.length - conyardsWithRefineries.length;
-        return Math.max(1, Math.min(REFINERY_HARD_LIMIT, 2 * harvesters * (conyardsWithoutRefineries + 1)));
+        return Math.max(1, Math.min(profile.refineryHardLimit, 2 * harvesters * (conyardsWithoutRefineries + 1)));
     }
 }
 
-// [enhanced] 2 -> 3 harvesters per refinery: slight congestion beats idle refineries.
-const IDEAL_HARVESTERS_PER_REFINERY = 3;
+// [enhanced] harvesters-per-refinery and total cap moved to DifficultyProfile
+// (idealHarvestersPerRefinery, maxHarvestersTotal).
 const MAX_HARVESTERS_PER_REFINERY = 4;
-// because refineries also scales based on harvesters, we need a cap
-// [enhanced] 10 -> 16: keep scaling economy into the late game.
-const MAX_HARVESTERS_TOTAL = 16;
 class Harvester extends BasicGroundUnit {
     constructor(basePriority, baseAmount, minNeeded) {
         super(basePriority, baseAmount, 0, 0);
         this.minNeeded = minNeeded;
     }
     // Priority goes up when we have fewer than this many refineries.
-    getPriority(game, playerData, technoRules, threatCache) {
+    getPriority(game, playerData, technoRules, threatCache, profile = STANDARD_PROFILE) {
         const refineries = game.getVisibleUnits(playerData.name, "self", (r) => r.refinery).length;
         const harvesters = game.getVisibleUnits(playerData.name, "self", (r) => r.harvester).length;
         const boost = harvesters < this.minNeeded ? 3 : harvesters > refineries * MAX_HARVESTERS_PER_REFINERY ? 0 : 1;
         // [enhanced] when cash is tight, getting miners out becomes urgent.
         const cashBoost = playerData.credits < 800 ? 2 : 1;
-        return this.basePriority * (refineries / Math.max(harvesters / IDEAL_HARVESTERS_PER_REFINERY, 1)) * boost * cashBoost;
+        return (this.basePriority *
+            (refineries / Math.max(harvesters / profile.idealHarvestersPerRefinery, 1)) *
+            boost *
+            cashBoost);
     }
-    getMaxCount(game, playerData, technoRules, threatCache) {
-        return MAX_HARVESTERS_TOTAL;
+    getMaxCount(game, playerData, technoRules, threatCache, profile = STANDARD_PROFILE) {
+        return profile.maxHarvestersTotal;
     }
 }
 
@@ -5866,7 +6031,7 @@ class BaseBuildingMission extends Mission {
         const optionWithPriority = options.map((option) => {
             return {
                 option,
-                priority: this.getPriorityForBuildingOption(option, game, playerData, threatCache),
+                priority: this.getPriorityForBuildingOption(option, game, playerData, threatCache, context.profile),
             };
         });
         const bestOption = maxBy(optionWithPriority, (option) => option.priority);
@@ -5885,10 +6050,10 @@ class BaseBuildingMission extends Mission {
     getPriority() {
         return 0;
     }
-    getPriorityForBuildingOption(option, game, playerStatus, threatCache) {
+    getPriorityForBuildingOption(option, game, playerStatus, threatCache, profile) {
         if (BUILDING_NAME_TO_RULES.has(option.name)) {
             let logic = BUILDING_NAME_TO_RULES.get(option.name);
-            return logic.getPriority(game, playerStatus, option, threatCache);
+            return logic.getPriority(game, playerStatus, option, threatCache, profile);
         }
         else {
             // Fallback priority when there are no rules.
@@ -5959,11 +6124,14 @@ const DEBUG_MESSAGES_BUFFER_LENGTH = 20;
 // Number of ticks per second at the base speed.
 const NATURAL_TICK_RATE = 15;
 class SupalosaBot extends _ {
-    constructor(name, country, tryAllyWith = [], enableLogging = true, strategy = new DefaultStrategy()) {
+    constructor(name, country, tryAllyWith = [], enableLogging = true, strategy = new DefaultStrategy(), 
+    // [enhanced] difficulty tier; defaults to the bundle-injected profile (standard in headless).
+    profile = getBundleProfile()) {
         super(name, country);
         this.tryAllyWith = tryAllyWith;
         this.enableLogging = enableLogging;
         this.strategy = strategy;
+        this.profile = profile;
         this.tickOfLastAttackOrder = 0;
         this.missionController = null;
         this.matchAwareness = null;
@@ -5975,7 +6143,8 @@ class SupalosaBot extends _ {
     }
     onGameStart(game) {
         const gameRate = game.getTickRate();
-        const botApm = 300;
+        // [enhanced] APM budget comes from the difficulty profile.
+        const botApm = this.profile.apm;
         const botRate = botApm / 60;
         this.tickRatio = Math.ceil(gameRate / botRate);
         const myPlayer = game.getPlayerData(this.name);
@@ -5984,16 +6153,18 @@ class SupalosaBot extends _ {
         }
         this.missionController = new MissionController((message, sayInGame) => this.logBotStatus(message, sayInGame));
         // TODO: Strategy should have an onGameStart call which sets up the initial missions.
-        this.missionController.addMission(new BaseBuildingMission(Q.Structures, (message, sayInGame) => this.logBotStatus(message, sayInGame), new OpeningBook()));
+        this.missionController.addMission(new BaseBuildingMission(Q.Structures, (message, sayInGame) => this.logBotStatus(message, sayInGame), 
+        // [enhanced] scripted opening build order (per difficulty profile)
+        this.profile.openingBook ? new OpeningBook() : undefined));
         this.missionController.addMission(new BaseBuildingMission(Q.Armory, (message, sayInGame) => this.logBotStatus(message, sayInGame)));
-        this.matchAwareness = new MatchAwarenessImpl(game, myPlayer, null, myPlayer.startLocation, (message, sayInGame) => this.logBotStatus(message, sayInGame));
+        this.matchAwareness = new MatchAwarenessImpl(game, myPlayer, null, myPlayer.startLocation, (message, sayInGame) => this.logBotStatus(message, sayInGame), this.profile);
         this._debugGridCaches = [
             { grid: this.matchAwareness.getSectorCache(), tag: "sector-cache" },
             { grid: this.matchAwareness.getBuildSpaceCache()._cache, tag: "build-cache" },
         ];
         this.matchAwareness.onGameStart(game, myPlayer);
-        // [enhanced] Announce ourselves in the in-game chat so it's obvious this is the enhanced build.
-        this.actionsApi.sayAll("[增强版AI] v3 已加载：经 50+ 局 AI 对战调优。祝你好运！");
+        // [enhanced] Announce ourselves in the in-game chat so it's obvious which tier is playing.
+        this.actionsApi.sayAll(`[增强版AI] ${this.profile.displayName} 已加载。祝你好运！`);
         this.tryAllyWith
             .filter((playerName) => playerName !== this.name)
             .forEach((playerName) => this.actionsApi.toggleAlliance(playerName, true));
@@ -6011,6 +6182,7 @@ class SupalosaBot extends _ {
             const fullContext = {
                 ...this.context,
                 matchAwareness: this.matchAwareness,
+                profile: this.profile, // [enhanced]
             };
             // hacky resign condition
             const armyUnits = game.getVisibleUnits(this.name, "self", (r) => r.isSelectableCombatant);
@@ -6084,15 +6256,18 @@ class SupalosaBot extends _ {
 
 // Entry for the ra2web-compatible bot bundle.
 // Re-exports the enhanced bot in the exact shape the client expects: { SupalosaBot, buildInfo, version }.
+// The difficulty tier is injected per output file by rollup (@rollup/plugin-replace).
+
+const tier = "standard" ;
 
 const version = "0.87.0";
 
 const buildInfo = Object.freeze({
     generation: 1,
     sourceCommit: "local-enhanced",
-    sourceRole: "enhanced-fork-v3-tuned",
+    sourceRole: "enhanced-tier-" + tier,
     artifactSource: "local-build",
-    naval: false,
+    naval: true,
 });
 
 export { SupalosaBot, buildInfo, version };
