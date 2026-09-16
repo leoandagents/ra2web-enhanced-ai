@@ -4898,11 +4898,13 @@ const VISIBLE_TARGET_ATTACK_COOLDOWN_TICKS = 60;
 // Number of ticks between attacking "bases" (enemy starting locations).
 // [enhanced] 1800 -> 900: start pushing unscouted enemy bases ~1 min earlier.
 const BASE_ATTACK_COOLDOWN_TICKS = 900;
-// [enhanced] Allow up to this many attack missions to prepare at once (was 1), creating back-to-back waves.
-const MAX_CONCURRENT_PREPARING_ATTACKS = 2;
+// [enhanced] Back to 1 concurrent preparing attack (upstream value). A/B testing showed that
+// 2 concurrent waves with different compositions thrash the production queue (their ramping
+// priorities repeatedly cross the 2x dequeue threshold, cancelling in-progress units).
+const MAX_CONCURRENT_PREPARING_ATTACKS = 1;
 // [enhanced] Don't start preparing a NEW attack wave while broke: waves in flight continue,
 // but the production queues go to harvesters/refineries/tech until the economy recovers.
-const MIN_CASH_FOR_NEW_ATTACK_WAVE = 1000;
+const MIN_CASH_FOR_NEW_ATTACK_WAVE = 500;
 const ATTACK_MISSION_INITIAL_PRIORITY = 1;
 class AttackMissionFactory {
     constructor(lastAttackAt = -VISIBLE_TARGET_ATTACK_COOLDOWN_TICKS) {
@@ -5991,7 +5993,7 @@ class SupalosaBot extends _ {
         ];
         this.matchAwareness.onGameStart(game, myPlayer);
         // [enhanced] Announce ourselves in the in-game chat so it's obvious this is the enhanced build.
-        this.actionsApi.sayAll("[增强版AI] v2 已加载：前期照旧凶猛，现在还学会攒钱发展了。祝你好运！");
+        this.actionsApi.sayAll("[增强版AI] v3 已加载：经 50+ 局 AI 对战调优。祝你好运！");
         this.tryAllyWith
             .filter((playerName) => playerName !== this.name)
             .forEach((playerName) => this.actionsApi.toggleAlliance(playerName, true));
@@ -6088,7 +6090,7 @@ const version = "0.87.0";
 const buildInfo = Object.freeze({
     generation: 1,
     sourceCommit: "local-enhanced",
-    sourceRole: "enhanced-fork-v2-naval",
+    sourceRole: "enhanced-fork-v3-tuned",
     artifactSource: "local-build",
     naval: false,
 });

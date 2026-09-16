@@ -85,19 +85,19 @@
       "integrity": "sha384-3pmIKkB2ecf6+SXGh93VSJIpSqMUNc3dELsUSGiUVLW5He/JfwOlHW2SBTBXs1jz"
     },
     "js/bot1.js": {
-      "bytes": 232118,
-      "sha256": "a30124c1905e253124b118a534aeacafbaef49e175d51d7a599720592ae012b7",
-      "integrity": "sha384-S1NQwJeKnHM5heDiYWPQoCbixCLxYS7a4KZgJPgR2CMVdiOQu/eC9C47f/+Qwxs7"
+      "bytes": 232261,
+      "sha256": "123bc5ddf1b26d6805c3b2c8a0bccca3ca6c292584d871b21a189c9dda8e2342",
+      "integrity": "sha384-CJu11Jx+ESV+4O9oaTvrHfMJbUgZAyvtPpiM422Qf9fdR5xC5dk/U1TeDjl/hVqo"
     },
     "js/bot2.js": {
-      "bytes": 232118,
-      "sha256": "a30124c1905e253124b118a534aeacafbaef49e175d51d7a599720592ae012b7",
-      "integrity": "sha384-S1NQwJeKnHM5heDiYWPQoCbixCLxYS7a4KZgJPgR2CMVdiOQu/eC9C47f/+Qwxs7"
+      "bytes": 232261,
+      "sha256": "123bc5ddf1b26d6805c3b2c8a0bccca3ca6c292584d871b21a189c9dda8e2342",
+      "integrity": "sha384-CJu11Jx+ESV+4O9oaTvrHfMJbUgZAyvtPpiM422Qf9fdR5xC5dk/U1TeDjl/hVqo"
     },
     "js/bot3.js": {
-      "bytes": 232118,
-      "sha256": "a30124c1905e253124b118a534aeacafbaef49e175d51d7a599720592ae012b7",
-      "integrity": "sha384-S1NQwJeKnHM5heDiYWPQoCbixCLxYS7a4KZgJPgR2CMVdiOQu/eC9C47f/+Qwxs7"
+      "bytes": 232261,
+      "sha256": "123bc5ddf1b26d6805c3b2c8a0bccca3ca6c292584d871b21a189c9dda8e2342",
+      "integrity": "sha384-CJu11Jx+ESV+4O9oaTvrHfMJbUgZAyvtPpiM422Qf9fdR5xC5dk/U1TeDjl/hVqo"
     },
     "js/ffmpeg-core.js": {
       "bytes": 70209,
