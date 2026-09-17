@@ -4193,7 +4193,9 @@ class MatchAwarenessImpl {
 }
 
 const ORDER_COOLDOWN_TICKS = 60;
-const mcvTypes = ["AMCV", "SMCV"];
+// [enhanced] MCV detection is rule-driven (general rules' baseUnit list), not hardcoded
+// unit names — mods (e.g. 共和国之辉's China faction) use different MCV unit names.
+const isMcv = (game, name) => game.getGeneralRules().baseUnit.includes(name);
 const CONYARD_SCAN_DISTANCE = 15; // distance to check a conyard is already in place
 const CONYARD_DEPLOY_SCAN_DISTANCE = 10; // distance to check for a deployable location
 const CONYARD_DEPLOY_DISTANCE = 5;
@@ -4220,7 +4222,9 @@ class ExpansionMission extends Mission {
         const { game, matchAwareness, actionBatcher } = context;
         const actionsApi = context.player.actions;
         const playerData = context.game.getPlayerData(context.player.name);
-        const mcvs = this.getUnitsOfTypes(game, ...mcvTypes);
+        const mcvs = this.getUnitsMatchingByRule(game, (r) => isMcv(game, r.name))
+            .map((id) => game.getUnitData(id))
+            .filter((u) => !!u);
         if (mcvs.length === 0) {
             // Perhaps we deployed already (or the unit was destroyed), end the mission.
             if (this.lastOrderAt !== null) {
@@ -4230,7 +4234,7 @@ class ExpansionMission extends Mission {
             if (this.selectedMcvId && !!game.getUnitData(this.selectedMcvId)) {
                 return requestSpecificUnits([this.selectedMcvId], this.priority);
             }
-            return requestUnitsWithSamePriority(mcvTypes, this.priority);
+            return requestUnitsWithSamePriority(game.getGeneralRules().baseUnit, this.priority);
         }
         // use the highest-hp MCV
         const selectedMcvUnit = maxBy(mcvs, (mcv) => mcv.hitPoints);
@@ -5125,8 +5129,10 @@ class DefenceMissionFactory {
     }
     getDefendablePoints(context) {
         const { game, player } = context;
+        // [enhanced] defendable points = conyards + MCVs (rule-driven, mod-safe)
+        const baseUnits = game.getGeneralRules().baseUnit;
         return game
-            .getVisibleUnits(player.name, "self", (r) => r.constructionYard || r.name === "AMCV" || r.name === "SMCV")
+            .getVisibleUnits(player.name, "self", (r) => r.constructionYard || baseUnits.includes(r.name))
             .map((unitId) => game.getGameObjectData(unitId))
             .filter((unit) => unit != null)
             .map((unit) => toVector2(unit.tile));
