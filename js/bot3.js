@@ -4461,8 +4461,10 @@ class ScoutingMission extends Mission {
         const { game, matchAwareness } = context;
         const actionsApi = context.player.actions;
         const playerData = game.getPlayerData(context.player.name);
-        const scoutNames = ["ADOG", "DOG", "E1", "E2", "FV", "HTK"];
-        const scouts = this.getUnitsOfTypes(game, ...scoutNames);
+        // [enhanced] scout = any cheap fast ground unit the faction has (mod-safe, no hardcoded names)
+        const scouts = this.getUnitsMatchingByRule(game, (r) => r.isSelectableCombatant && !r.harvester)
+            .map((id) => game.getUnitData(id))
+            .filter((u) => !!u);
         if ((matchAwareness.getSectorCache().getOverallVisibility() || 0) > 0.9) {
             return disbandMission();
         }
@@ -4472,7 +4474,7 @@ class ScoutingMission extends Mission {
                 this.attemptsOnCurrentTarget++;
                 this.hadUnit = false;
             }
-            return requestUnitsWithSamePriority(scoutNames, this.priority);
+            return requestUnitsWithSamePriority(this.getScoutTypes(context), this.priority);
         }
         else if (this.scoutTarget) {
             this.hadUnit = true;
@@ -4523,6 +4525,18 @@ class ScoutingMission extends Mission {
         }
         return noop();
     }
+    // [enhanced] Scout candidates by rules: cheap combat infantry/vehicles (dogs, GIs, flak tracks...),
+    // any faction. Falls back to the cheapest combatant available.
+    getScoutTypes(context) {
+        const { player } = context;
+        const available = [
+            ...player.production.getAvailableObjects(Q.Infantry),
+            ...player.production.getAvailableObjects(Q.Vehicles),
+        ].filter((r) => r.isSelectableCombatant && !r.harvester && !r.engineer);
+        const cheap = available.filter((r) => r.cost <= 600).sort((a, b) => a.cost - b.cost);
+        const pool = cheap.length > 0 ? cheap : available.sort((a, b) => a.cost - b.cost);
+        return pool.slice(0, 3).map((r) => r.name);
+    }
     setScoutTarget(target, currentTick) {
         this.attemptsOnCurrentTarget = 0;
         this.scoutTargetRefreshedAt = currentTick;
@@ -4565,7 +4579,8 @@ const NONCE_GI_DEPLOY = 0;
 const NONCE_GI_UNDEPLOY = 1;
 // Micro methods
 function manageMoveMicro(attacker, attackPoint) {
-    if (attacker.name === "E1") {
+    // [enhanced] deployable infantry (rules.deployer: GI etc.), not just hardcoded "E1"
+    if (attacker.rules.deployer) {
         const isDeployed = attacker.stance === S.Deployed;
         if (isDeployed) {
             return BatchableAction.noTarget(attacker.id, O.DeploySelected, NONCE_GI_UNDEPLOY);
@@ -4575,7 +4590,8 @@ function manageMoveMicro(attacker, attackPoint) {
 }
 function manageAttackMicro(attacker, target) {
     const distance = getDistanceBetweenUnits(attacker, target);
-    if (attacker.name === "E1") {
+    // [enhanced] deployable infantry (rules.deployer), not just hardcoded "E1"
+    if (attacker.rules.deployer) {
         // Para (deployed weapon) range is 5.
         const deployedWeaponRange = attacker.secondaryWeapon?.maxRange || 5;
         const isDeployed = attacker.stance === S.Deployed;
@@ -5289,11 +5305,40 @@ class EngineerMission extends Mission {
     get targetId() {
         return this.captureTargetId;
     }
+    // [enhanced] Composition from rules, not names: 1 engineer + escorts scaled by escort level
+    // (cheap combatant at low levels, strongest combatant added at level 3+).
+    buildComposition(context) {
+        const { player } = context;
+        const available = [
+            ...player.production.getAvailableObjects(Q.Infantry),
+            ...player.production.getAvailableObjects(Q.Vehicles),
+        ];
+        const composition = {};
+        const engineer = available.find((r) => r.engineer);
+        if (engineer) {
+            composition[engineer.name] = 1;
+        }
+        const combatants = available
+            .filter((r) => !r.engineer && r.isSelectableCombatant && !r.harvester)
+            .sort((a, b) => a.cost - b.cost);
+        const cheap = combatants[0];
+        const strong = combatants[combatants.length - 1];
+        if (cheap && this.escortLevel >= 2) {
+            composition[cheap.name] = this.escortLevel - 1;
+        }
+        if (strong && this.escortLevel >= 3 && strong.name !== cheap?.name) {
+            composition[strong.name] = 1;
+        }
+        return composition;
+    }
     _onAiUpdate(context) {
         const { game } = context;
         const actionsApi = context.player.actions;
         const playerData = game.getPlayerData(context.player.name);
-        const engineers = this.getUnitsOfTypes(game, ...["SENGINEER", "ENGINEER"]);
+        // [enhanced] rule-driven engineer detection (mod-safe, any faction's engineer unit)
+        const engineers = this.getUnitsMatchingByRule(game, (r) => r.engineer)
+            .map((id) => game.getUnitData(id))
+            .filter((u) => !!u);
         const target = game.getGameObjectData(this.captureTargetId);
         if (!target || target.owner === playerData.name) {
             // Target gone or already captured, disband.
@@ -5304,19 +5349,9 @@ class EngineerMission extends Mission {
             return disbandMission(LOST_ENGINEER);
         }
         if (this.state === EngineerMissionState.Preparing) {
-            const composition = {};
-            switch (playerData.country.side) {
-                case b.Nod:
-                    composition["SENGINEER"] = 1;
-                    composition["DOG"] = Math.max(0, this.escortLevel - 1); // 0, 1, 2
-                    composition["HTNK"] = Math.max(0, this.escortLevel - 2); // 0, 0, 1
-                    break;
-                case b.GDI:
-                    composition["ENGINEER"] = 1;
-                    composition["ADOG"] = Math.max(0, this.escortLevel - 1); // 0, 1, 2
-                    composition["MTNK"] = Math.max(0, this.escortLevel - 2); // 0, 0, 1
-                    break;
-            }
+            // [enhanced] build the composition from whatever the faction actually offers:
+            // 1 engineer + escorts chosen by rules (cheap fast combatants), not hardcoded names.
+            const composition = this.buildComposition(context);
             const missingUnits = this.getMissingUnits(game, composition);
             if (missingUnits.length > 0) {
                 return requestUnitsWithSamePriority(missingUnits.map(([unitName]) => unitName), this.priority);
@@ -5330,7 +5365,10 @@ class EngineerMission extends Mission {
                 return disbandMission(NO_PATH);
             }
             actionsApi.orderUnits([engineer.id], O.Capture, this.captureTargetId);
-            const escortUnits = this.getUnitsOfTypes(game, "DOG", "HTNK", "ADOG", "MTNK");
+            // [enhanced] escort = any of the mission's non-engineer combatants.
+            const escortUnits = this.getUnitsMatchingByRule(game, (r) => !r.engineer && r.isSelectableCombatant)
+                .map((id) => game.getUnitData(id))
+                .filter((u) => !!u);
             if (escortUnits.length > 0) {
                 actionsApi.orderUnits(escortUnits.map((u) => u.id), O.Guard, engineer.id);
             }
@@ -5516,7 +5554,7 @@ class DefaultStrategy {
         const { profile } = context; // [enhanced]
         this.expansionFactory.maybeCreateMissions(context, missionController, logger);
         this.scoutingFactory.maybeCreateMissions(context, missionController, logger);
-        const composition = this.selectRandomAttackComposition(context, logger);
+        const composition = this.selectRandomAttackComposition(context, logger) ?? this.selectFallbackComposition(context, logger);
         if (composition) {
             this.attackFactory.maybeCreateMissions(context, missionController, logger, composition);
         }
@@ -5525,7 +5563,14 @@ class DefaultStrategy {
             const side = context.game.getPlayerData(context.player.name).country?.side;
             // SideType.Nod is the legacy name for the Soviet side.
             const harassComposition = side === b.Nod ? HARASS_COMPOSITIONS.soviet : HARASS_COMPOSITIONS.allied;
-            this.harassmentFactory.maybeCreateMissions(context, missionController, logger, harassComposition);
+            // Skip when the raider unit isn't buildable (mod without HTK/FV).
+            const raiderName = Object.keys(harassComposition.composition)[0];
+            const available = context.player.production
+                .getAvailableObjects(Q.Vehicles)
+                .some((r) => r.name === raiderName);
+            if (available) {
+                this.harassmentFactory.maybeCreateMissions(context, missionController, logger, harassComposition);
+            }
         }
         this.defenceFactory.maybeCreateMissions(context, missionController, logger);
         // [enhanced] harvester escort, per tier.
@@ -5549,6 +5594,26 @@ class DefaultStrategy {
         const randomIndex = context.game.generateRandomInt(0, validCompositions.length - 1);
         const compositionId = validCompositions[randomIndex];
         return DEFAULT_COMPOSITIONS[compositionId];
+    }
+    /**
+     * [enhanced] Mod-safe fallback: when no named composition is fully buildable (a mod with
+     * different unit names), attack with squads of the strongest available combat unit instead.
+     */
+    selectFallbackComposition(context, logger) {
+        const available = [
+            ...context.player.production.getAvailableObjects(Q.Vehicles),
+            ...context.player.production.getAvailableObjects(Q.Infantry),
+        ].filter((r) => r.isSelectableCombatant && !r.harvester && !r.engineer);
+        if (available.length === 0) {
+            return null;
+        }
+        const best = available.sort((a, b) => b.cost - a.cost)[0];
+        logger(`No named composition available, falling back to generic squad of ${best.name}`);
+        return {
+            composition: { [best.name]: 1 },
+            minimumUnits: 4,
+            maximumUnits: 12,
+        };
     }
 }
 
@@ -5939,6 +6004,43 @@ function getDefaultPlacementLocation(game, playerData, idealPoint, technoRules, 
     return undefined;
 }
 const DEFAULT_BUILDING_PRIORITY = 0;
+/**
+ * [enhanced] Classify buildings by their rules when the unit name isn't in
+ * BUILDING_NAME_TO_RULES — mods (e.g. 共和国之辉's China faction) use different names
+ * for power plants/refineries/etc., and the AI must still know how to build them.
+ * Returns null for things we should never auto-build (conyards) or don't understand.
+ */
+const MOD_FALLBACK_POWER_PLANT = new PowerPlant();
+function classifyBuildingByRules(rules) {
+    if (rules.constructionYard) {
+        return null; // comes from deploying an MCV, never queue-built
+    }
+    if (rules.power > 0) {
+        return MOD_FALLBACK_POWER_PLANT;
+    }
+    if (rules.refinery) {
+        return new ResourceCollectionBuilding(10, 3);
+    }
+    if (rules.weaponsFactory) {
+        return new BasicBuilding(15, 3);
+    }
+    if (rules.factory === F.InfantryType) {
+        return new BasicBuilding(12, 1); // barracks-equivalent
+    }
+    if (rules.radar) {
+        return new BasicBuilding(10, 1, 500);
+    }
+    if (rules.dock.length > 0) {
+        return new BasicBuilding(1, 1, 5000); // service depot equivalent
+    }
+    if (rules.turret) {
+        return new AntiGroundStaticDefence(2, 1, 7.5, 5); // armed static defence
+    }
+    if (rules.techLevel >= 8) {
+        return new BasicBuilding(20, 1, 4000); // battle lab / high-tech equivalent
+    }
+    return null;
+}
 const BUILDING_NAME_TO_RULES = new Map([
     // Allied
     ["GAPOWR", new PowerPlant()],
@@ -6063,13 +6165,18 @@ class BaseBuildingMission extends Mission {
             return logic.getPriority(game, playerStatus, option, threatCache, profile);
         }
         else {
+            // [enhanced] mod-safe: classify unknown (mod) buildings by their rules
+            const logic = classifyBuildingByRules(option);
+            if (logic) {
+                return logic.getPriority(game, playerStatus, option, threatCache, profile);
+            }
             // Fallback priority when there are no rules.
             return (DEFAULT_BUILDING_PRIORITY - game.getVisibleUnits(playerStatus.name, "self", (r) => r == option).length);
         }
     }
     getBestLocationForStructure(game, playerData, objectReady) {
-        if (BUILDING_NAME_TO_RULES.has(objectReady.name)) {
-            let logic = BUILDING_NAME_TO_RULES.get(objectReady.name);
+        const logic = BUILDING_NAME_TO_RULES.get(objectReady.name) ?? classifyBuildingByRules(objectReady); // [enhanced] mod-safe
+        if (logic) {
             return logic.getPlacementLocation(game, playerData, objectReady);
         }
         else {
