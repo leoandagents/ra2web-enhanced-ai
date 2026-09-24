@@ -12,7 +12,7 @@
       throw error;
     }
   })();
-import { V, a, G, Q, c, e, M, B, L, T, O, S, Z, A, F, b, _, d } from './app.js?v=0.87.0-ra650aef-d3634901c';
+import { V, G, Q, c, e, a, M, B, L, T, O, S, Z, A, F, b, _, d } from './app.js?v=0.87.0-ra650aef-d3634901c';
 
 var Countries;
 (function (Countries) {
@@ -114,13 +114,6 @@ function toPathNode(tile, onBridge) {
 }
 function toVector2(tile) {
     return new V(tile.rx, tile.ry);
-}
-function isTechnoRulesObject(obj) {
-    return (!!obj &&
-        (obj.rules.type === a.Building ||
-            obj.rules.type === a.Aircraft ||
-            obj.rules.type === a.Vehicle ||
-            obj.rules.type === a.Infantry));
 }
 
 function calculateAreaVisibility(mapApi, playerData, startPoint, endPoint) {
@@ -4203,14 +4196,19 @@ const CONYARD_DEPLOY_DISTANCE = 5;
  * A mission that tries to create an MCV (if it doesn't exist) and deploy it somewhere it can be deployed.
  */
 class ExpansionMission extends Mission {
-    constructor(uniqueName, priority, selectedMcvId, candidates, logger) {
+    constructor(uniqueName, priority, selectedMcvId, candidates, logger, 
+    // [enhanced] deploy even if a construction yard is already near the destination (fallback deploy-in-place)
+    allowNearConyard = false) {
         super(uniqueName, logger);
         this.priority = priority;
         this.selectedMcvId = selectedMcvId;
         this.candidates = candidates;
+        this.allowNearConyard = allowNearConyard;
         this.destination = null;
         this.lastOrderAt = null;
         this.lastOrderDeploy = false;
+        this.createdAt = null; // [enhanced]
+        this.boundToMcv = selectedMcvId !== null;
         if (candidates.length === 1) {
             this.destination = candidates[0];
         }
@@ -4218,10 +4216,14 @@ class ExpansionMission extends Mission {
             throw new Error("ExpansionMission requires at least one candidate location");
         }
     }
+    getMcvId() {
+        return this.selectedMcvId;
+    }
     _onAiUpdate(context) {
         const { game, matchAwareness, actionBatcher } = context;
         const actionsApi = context.player.actions;
         const playerData = context.game.getPlayerData(context.player.name);
+        this.createdAt ?? (this.createdAt = game.getCurrentTick());
         const mcvs = this.getUnitsMatchingByRule(game, (r) => isMcv(game, r.name))
             .map((id) => game.getUnitData(id))
             .filter((u) => !!u);
@@ -4230,9 +4232,21 @@ class ExpansionMission extends Mission {
             if (this.lastOrderAt !== null) {
                 return disbandMission();
             }
-            // We need an mcv!
-            if (this.selectedMcvId && !!game.getUnitData(this.selectedMcvId)) {
-                return requestSpecificUnits([this.selectedMcvId], this.priority);
+            // [enhanced] Missions bound to a specific MCV end when it's gone, instead of ordering a new MCV.
+            if (this.boundToMcv) {
+                if (this.selectedMcvId && !!game.getUnitData(this.selectedMcvId)) {
+                    return requestSpecificUnits([this.selectedMcvId], this.priority);
+                }
+                return disbandMission("MCV lost");
+            }
+            // [enhanced] Build-a-new-MCV mission: once any MCV of ours exists (possibly handed to another expansion
+            // mission), stop ordering more. Also give up if it isn't delivered in time (no factory / no money).
+            const baseUnits = game.getGeneralRules().baseUnit;
+            if (game.getVisibleUnits(playerData.name, "self", (r) => baseUnits.includes(r.name)).length > 0) {
+                return disbandMission("MCV delivered to another mission");
+            }
+            if (game.getCurrentTick() > this.createdAt + MCV_BUILD_TIMEOUT_TICKS) {
+                return disbandMission("MCV build timed out");
             }
             return requestUnitsWithSamePriority(game.getGeneralRules().baseUnit, this.priority);
         }
@@ -4265,13 +4279,28 @@ class ExpansionMission extends Mission {
         if (!this.destination) {
             return noop();
         }
-        // if there's a conyard near the destination, we're done.
+        // if there's a conyard near the destination, the spot is taken.
         const conYards = gameApi
             .getUnitsInArea(new B(this.destination.clone().subScalar(CONYARD_SCAN_DISTANCE), this.destination.clone().addScalar(CONYARD_SCAN_DISTANCE)))
             .map((id) => getCachedTechnoRules(gameApi, id))
             .filter((r) => r?.constructionYard);
-        if (conYards.length > 0) {
-            return disbandMission();
+        if (conYards.length > 0 && !this.allowNearConyard) {
+            // [enhanced] Upstream disbanded here, leaving the MCV idle forever when the spot was taken
+            // (often by the enemy). Try the next candidate instead; if none remain, deploy where we stand.
+            const taken = this.destination;
+            this.candidates = this.candidates.filter((c) => c.distanceTo(taken) > CONYARD_SCAN_DISTANCE);
+            if (this.candidates.length === 1) {
+                this.destination = this.candidates[0];
+            }
+            else if (this.candidates.length > 1) {
+                this.destination = null; // re-pick the closest reachable candidate next update
+            }
+            else {
+                this.destination = toVector2(mcv.tile);
+                this.allowNearConyard = true;
+            }
+            this.lastOrderDeploy = false;
+            return noop();
         }
         const isClose = toVector2(mcv.tile).distanceTo(this.destination) <= CONYARD_DEPLOY_DISTANCE;
         const canOrder = !this.lastOrderAt || gameApi.getCurrentTick() > this.lastOrderAt + ORDER_COOLDOWN_TICKS;
@@ -4340,7 +4369,7 @@ function findDeployableLocations(playerName, gameApi, rectangle, rules) {
                 continue;
             }
             const right = x < rectangle.width - 1 ? grid[x + 1][y] : 0;
-            const bottom = y < rectangle.height - 1 ? grid[y][y + 1] : 0;
+            const bottom = y < rectangle.height - 1 ? grid[x][y + 1] : 0; // [enhanced] was grid[y][y + 1] (typo)
             grid[x][y] = Math.min(right + 1, bottom + 1);
         }
     }
@@ -4354,34 +4383,16 @@ function findDeployableLocations(playerName, gameApi, rectangle, rules) {
     }
     return locations;
 }
-class PackConyardMission extends Mission {
-    constructor(uniqueName, conyardId, logger) {
-        super(uniqueName, logger);
-        this.conyardId = conyardId;
-    }
-    _onAiUpdate(context) {
-        const { game } = context;
-        const actionsApi = context.player.actions;
-        const conyardOrMcv = game.getGameObjectData(this.conyardId);
-        if (!conyardOrMcv) {
-            // maybe it died, or unpacked already
-            return disbandMission();
-        }
-        actionsApi.orderUnits([this.conyardId], O.Move, conyardOrMcv.tile.rx, conyardOrMcv.tile.ry);
-        return noop();
-    }
-    getGlobalDebugText() {
-        return `Pack conyard ${this.conyardId}`;
-    }
-    getPriority() {
-        return 10000;
-    }
-}
-const CONYARD_PACK_COOLDOWN = 15 * 60 * 4; // [enhanced] was 6 mins -> 4 mins
+// [enhanced] Expansion no longer packs up the construction yard (a human keeps the main conyard deployed and
+// expands with an extra MCV). Instead, a new MCV is ordered from the war factory when it's affordable and safe.
+const EXPANSION_COOLDOWN_TICKS = 15 * 60 * 4; // min time between two MCV build orders
+const MCV_BUILD_TIMEOUT_TICKS = 15 * 60 * 4; // abandon an MCV build order not delivered within 4 minutes
+const MCV_BUILD_PRIORITY = 60; // above attack missions' max (50) so the vehicle queue actually picks it
+const MAX_CONYARDS = 3;
 // [enhanced] expansion start delay moved to DifficultyProfile.expansionDelayTicks
 class ExpansionMissionFactory {
-    constructor(lastConyardPackAt = Number.MIN_VALUE) {
-        this.lastConyardPackAt = lastConyardPackAt;
+    constructor(lastExpansionOrderAt = Number.MIN_VALUE) {
+        this.lastExpansionOrderAt = lastExpansionOrderAt;
     }
     getName() {
         return "ExpansionMissionFactory";
@@ -4389,51 +4400,61 @@ class ExpansionMissionFactory {
     maybeCreateMissions(context, missionController, logger) {
         const { game, player, matchAwareness, profile } = context;
         const playerData = game.getPlayerData(player.name);
-        const mcvs = game.getVisibleUnits(player.name, "self", (r) => game.getGeneralRules().baseUnit.includes(r.name));
+        const baseUnits = game.getGeneralRules().baseUnit;
+        const mcvs = game.getVisibleUnits(player.name, "self", (r) => baseUnits.includes(r.name));
         const expandToCandidates = matchAwareness.getNextExpansionCandidates();
         const expansionDelayTicks = profile.expansionDelayTicks; // [enhanced]
-        // This is used for deploying the initial MCV.
-        if (game.getCurrentTick() < expansionDelayTicks) {
-            mcvs.forEach((mcv) => {
+        const expansionMissions = missionController
+            .getMissions()
+            .filter((m) => m instanceof ExpansionMission);
+        const handledMcvIds = new Set(expansionMissions.map((m) => m.getMcvId()));
+        // Give every MCV that isn't already handled a mission.
+        mcvs.filter((mcv) => !handledMcvIds.has(mcv)).forEach((mcv) => {
+            if (game.getCurrentTick() < expansionDelayTicks) {
+                // This is used for deploying the initial MCV.
                 missionController.addMission(new ExpansionMission("initial-deploy-mcv-" + mcv, 100, mcv, [playerData.startLocation], logger));
-            });
-        }
-        else if (expandToCandidates.length > 0) {
-            mcvs.forEach((mcv) => {
+            }
+            else if (expandToCandidates.length > 0) {
                 missionController.addMission(new ExpansionMission("expansion-mcv-" + mcv, 100, mcv, expandToCandidates, logger));
-            });
-        }
+            }
+            else {
+                // [enhanced] No expansion spot: deploy where it stands instead of idling forever.
+                const unit = game.getUnitData(mcv);
+                if (unit) {
+                    missionController.addMission(new ExpansionMission("deploy-mcv-" + mcv, 100, mcv, [toVector2(unit.tile)], logger, true));
+                }
+            }
+        });
         const threatCache = matchAwareness.getThreatCache();
         if (!expandToCandidates[0] || !threatCache) {
             return;
         }
         if (game.getCurrentTick() < expansionDelayTicks ||
-            game.getCurrentTick() < this.lastConyardPackAt + CONYARD_PACK_COOLDOWN) {
+            game.getCurrentTick() < this.lastExpansionOrderAt + EXPANSION_COOLDOWN_TICKS) {
             return;
         }
-        // TODO: do not pack up if currently producing something from the conyard
-        // if we have a war factory and at least 1 refinery, try expand
+        // one expansion at a time: no MCV on the field and no pending MCV order
+        if (mcvs.length > 0 || expansionMissions.some((m) => m.getMcvId() === null)) {
+            return;
+        }
         const conYards = game.getVisibleUnits(player.name, "self", (r) => r.constructionYard);
-        const warFactories = game.getVisibleUnits(player.name, "self", (r) => r.weaponsFactory);
-        const isSafeToExpand = threatCache.totalAvailableAntiGroundFirepower > threatCache.totalOffensiveLandThreat;
         const refineries = game.getVisibleUnits(player.name, "self", (r) => r.refinery);
-        if (conYards.length === 0 || warFactories.length === 0 || refineries.length === 0 || !isSafeToExpand) {
+        const isSafeToExpand = threatCache.totalAvailableAntiGroundFirepower > threatCache.totalOffensiveLandThreat;
+        if (conYards.length === 0 || conYards.length >= MAX_CONYARDS || refineries.length === 0 || !isSafeToExpand) {
             return;
         }
-        const selectedConyard = game.getGameObjectData(conYards[0]);
-        const refineryNearconyard = game
-            .getUnitsInArea(new B(toVector2(selectedConyard.tile).subScalar(10), toVector2(selectedConyard.tile).addScalar(14)))
-            .map((id) => game.getGameObjectData(id))
-            .filter(isTechnoRulesObject)
-            .filter((obj) => obj.rules.refinery);
-        if (refineryNearconyard.length > 0) {
-            missionController.addMission(new PackConyardMission("pack-up-" + selectedConyard.id, selectedConyard.id, logger));
-            logger("Time to pack the conyard and expand", false);
-            this.lastConyardPackAt = game.getCurrentTick();
+        // rule-driven: only if an MCV is actually buildable right now (prerequisites such as the service depot)
+        const buildableMcv = player.production
+            .getAvailableObjects(Q.Vehicles)
+            .filter((r) => baseUnits.includes(r.name))
+            .sort((a, b) => a.cost - b.cost)[0];
+        // no credit gate: production is paid as it progresses, and the AI rarely floats money
+        if (!buildableMcv) {
+            return;
         }
-        else {
-            logger("Not time to pack up, no refinery yet");
-        }
+        missionController.addMission(new ExpansionMission("build-mcv-expand-" + game.getCurrentTick(), MCV_BUILD_PRIORITY, null, expandToCandidates, logger));
+        logger(`Ordering a new MCV (${buildableMcv.name}) to expand`, false);
+        this.lastExpansionOrderAt = game.getCurrentTick();
     }
 }
 
@@ -5361,6 +5382,11 @@ class EngineerMission extends Mission {
         if (this.state === EngineerMissionState.Capturing &&
             game.getCurrentTick() > this.lastCaptureAttemptTick + CAPTURE_COOLDOWN_TICKS) {
             const engineer = engineers[0];
+            // [enhanced] The rule-driven composition omits the engineer when none is buildable (e.g. barracks lost),
+            // so we can reach this state without one.
+            if (!engineer) {
+                return disbandMission(LOST_ENGINEER);
+            }
             if (!canReachStructure(game, engineer, target)) {
                 return disbandMission(NO_PATH);
             }
@@ -5743,6 +5769,25 @@ class BasicBuilding {
     }
 }
 
+// [enhanced] The service depot is the MCV's prerequisite. Expansion now builds an extra MCV instead of packing
+// up the construction yard, so once the expansion window opens the depot becomes a real priority rather than
+// something only built with 5000+ floating credits (which the AI almost never has).
+const EXPANSION_WINDOW_TICKS = 15 * 60 * 6;
+const PRIORITY_IN_EXPANSION_WINDOW = 8;
+class ServiceDepot extends BasicBuilding {
+    constructor() {
+        super(1, 1, 5000);
+    }
+    getPriority(game, playerData, technoRules, threatCache) {
+        const basePriority = super.getPriority(game, playerData, technoRules, threatCache);
+        if (basePriority < 0 || game.getCurrentTick() < EXPANSION_WINDOW_TICKS) {
+            return basePriority;
+        }
+        const hasRefinery = game.getVisibleUnits(playerData.name, "self", (r) => r.refinery).length > 0;
+        return hasRefinery ? PRIORITY_IN_EXPANSION_WINDOW : basePriority;
+    }
+}
+
 class BasicGroundUnit {
     constructor(basePriority, baseAmount, antiGroundPower = 1, // boolean for now, but will eventually be used in weighting.
     antiAirPower = 0) {
@@ -6031,7 +6076,7 @@ function classifyBuildingByRules(rules) {
         return new BasicBuilding(10, 1, 500);
     }
     if (rules.dock.length > 0) {
-        return new BasicBuilding(1, 1, 5000); // service depot equivalent
+        return new ServiceDepot(); // service depot equivalent [enhanced]
     }
     if (rules.turret) {
         return new AntiGroundStaticDefence(2, 1, 7.5, 5); // armed static defence
@@ -6048,7 +6093,7 @@ const BUILDING_NAME_TO_RULES = new Map([
     ["GAWEAP", new BasicBuilding(15, 3)],
     ["GAPILE", new BasicBuilding(12, 1)],
     ["CMIN", new Harvester(15, 4, 4)],
-    ["GADEPT", new BasicBuilding(1, 1, 5000)],
+    ["GADEPT", new ServiceDepot()],
     ["GAAIRC", new BasicBuilding(10, 1, 500)],
     ["AMRADR", new BasicBuilding(10, 1, 500)],
     ["GATECH", new BasicBuilding(20, 1, 4000)],
@@ -6079,7 +6124,7 @@ const BUILDING_NAME_TO_RULES = new Map([
     ["NAWEAP", new BasicBuilding(15, 3)],
     ["NAHAND", new BasicBuilding(12, 1)],
     ["HARV", new Harvester(15, 4, 4)],
-    ["NADEPT", new BasicBuilding(1, 1, 5000)],
+    ["NADEPT", new ServiceDepot()],
     ["NARADR", new BasicBuilding(10, 1, 500)],
     ["NANRCT", new PowerPlant()],
     ["NAYARD", new NavalYard(8, 1, 2000)],
